@@ -1,0 +1,13 @@
+aoc -march=emulator -board=s5_ref -report kernel.cl -o bin/kernel.aocx -fpc -fp-relaxed
+
+aoc -board=de10_nano_sharedonly -report kernel.cl -o bin/kernel.aocx
+
+g++ -O2 -fPIC host/src/main.cpp ../common/src/AOCLUtils/*.cpp -I../common/inc -I/home/navid/intelFPGA/18.1/hld/host/include/ -L/home/navid/intelFPGA/18.1/hld/host/linux64/lib -Wl,--no-as-needed -lalteracl -lelf -lrt -lpthread -lboost_program_options -o bin/host
+
+CL_CONTEXT_EMULATOR_DEVICE_INTELFPGA=1 ./host --infile examples/random_ksat_100_400.dimacs
+
+valgrind --tool=callgrind ./host --infile examples/random_ksat_100_400.dimacs CL_CONTEXT_EMULATOR_DEVICE_INTELFPGA=1 
+
+
+
+aoc -board=de10_nano_sharedonly -report kernel.cl -o bin/kernel.aocx -fpc -fp-relaxed
