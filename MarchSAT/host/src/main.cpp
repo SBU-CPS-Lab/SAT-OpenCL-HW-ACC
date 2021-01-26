@@ -32,7 +32,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <string>
 #include <unistd.h>
 #include <signal.h>
 
@@ -1363,10 +1363,10 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	if (clSetKernelArg(kernel, 8, sizeof(prog_opts.random_flips), &prog_opts.random_flips) != CL_SUCCESS){
-		fprintf(stderr, "clSetKernelArg() failed\n");
-		exit(EXIT_FAILURE);
-	}
+	// if (clSetKernelArg(kernel, 8, sizeof(prog_opts.random_flips), &prog_opts.random_flips) != CL_SUCCESS){
+	// 	fprintf(stderr, "clSetKernelArg() failed\n");
+	// 	exit(EXIT_FAILURE);
+	// }
 
 	struct timeval tv_a;
 	if (gettimeofday(&tv_a, NULL) == -1) {
