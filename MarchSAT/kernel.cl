@@ -24,6 +24,28 @@ typedef ushort u16;
 typedef uint u32;
 typedef ulong u64;
 
+
+__constant u32 tab32[32] = {
+     0,  9,  1, 10, 13, 21,  2, 29,
+    11, 14, 16, 18, 22, 25,  3, 30,
+     8, 12, 20, 28, 15, 17, 24,  7,
+    19, 27, 23,  6, 26,  5,  4, 31};
+
+int log2_32 (u32 value)
+{
+    value |= value >> 1;
+    value |= value >> 2;
+    value |= value >> 4;
+    value |= value >> 8;
+    value |= value >> 16;
+    return tab32[(u32)(value*0x07C4ACDD) >> 27];
+}
+
+u32 mod_alt(u32 rnd_num, u32 range)
+{
+    return rnd_num & ((1 << log2_32(2 * range)) - 1);
+}
+
 struct thread_state {
 	// u64 rnd;
     u32 rnd;
@@ -41,7 +63,7 @@ u32 rnd(u32 current_rnd){
 	return ret;
 }
 
-bool get_bit(u32 var, __global u32 * restrict bit_values, u32 nr_bit_words)
+bool get_bit(u32 var, __local u32 * restrict bit_values, u32 nr_bit_words)
 {
 	u32 index = var >> 5;
     // u32 offset = var % 32;
@@ -52,7 +74,7 @@ bool get_bit(u32 var, __global u32 * restrict bit_values, u32 nr_bit_words)
 	return (word << (31 - offset)) >> 31;
 }
 
-void flip_bit(u32 var, __global u32 * restrict bit_values, u32 nr_bit_words)
+void flip_bit(u32 var, __local u32 * restrict bit_values, u32 nr_bit_words)
 {
 	u32 index = var >> 5;
     // u32 offset = var % 32;
@@ -64,7 +86,7 @@ void flip_bit(u32 var, __global u32 * restrict bit_values, u32 nr_bit_words)
 	bit_values[index + nr_bit_words*get_global_id(0)] = word;
 }
 
-bool evaluate_literal(u32 lit, __global u32 * restrict bit_values, u32 nr_bit_words, u32 flip_var)
+bool evaluate_literal(u32 lit, __local u32 * restrict bit_values, u32 nr_bit_words, u32 flip_var)
 {
 	bool sign = lit & 1;
 	u32 var = lit >> 1;
@@ -80,14 +102,13 @@ bool evaluate_literal(u32 lit, __global u32 * restrict bit_values, u32 nr_bit_wo
 	return (evaluation ^ sign) ^ flip;
 }
 
-bool evaluate_clause(__constant u32* restrict clauses, u32 index_to_clause, __global u32 * restrict bit_values, u32 nr_bit_words, u32 flip_var)
+bool evaluate_clause(__constant u32* restrict clauses, u32 index_to_clause, __local u32 * restrict bit_values, u32 nr_bit_words, u32 flip_var)
 {
 	// this function behaved weird and therefore this strange return pattern
 	// there was a bug in one of the calling functions, might have been due to that
 
 	u32 index 	= clauses[index_to_clause];		// get pointer to clause info
 	u32 nr_lits = clauses[index];				// first field contains number of literals
-    #pragma pipline
 	for (int i = 0; i < nr_lits; i++){
 		u32 lit = clauses[index + 1 + i];
 		if(evaluate_literal(lit, bit_values, nr_bit_words, flip_var))
@@ -96,12 +117,11 @@ bool evaluate_clause(__constant u32* restrict clauses, u32 index_to_clause, __gl
 	return false;
 }
 
-u32 evaluate_clauses_of_variable_unsatisfied(u32 var, __constant u32* restrict variables_to_clauses, __constant u32* restrict clauses, __global u32* restrict bit_values, u32 nr_bit_words, bool flip){
+u32 evaluate_clauses_of_variable_unsatisfied(u32 var, __global u32* restrict variables_to_clauses, __constant u32* restrict clauses, __local u32* restrict bit_values, u32 nr_bit_words, bool flip){
 	u32 index = variables_to_clauses[var]; 			// get index where variable to clauses info is stored
 	u32 nr_clauses = variables_to_clauses[index];	// first field contains number of clauses the variable occurs in
 
 	u32 evaluation = 0;
-    #pragma pipline
 	for (unsigned int i = 0; i < nr_clauses; i++){
 		u32 index_to_clause = variables_to_clauses[index + 1 + i];
 		if (flip)
@@ -113,12 +133,11 @@ u32 evaluate_clauses_of_variable_unsatisfied(u32 var, __constant u32* restrict v
 	return evaluation;
 }
 
-u32 evaluate_clauses_of_variable_satisfied(u32 var, __constant u32* restrict variables_to_clauses, __constant u32* restrict clauses, __global u32* restrict bit_values, u32 nr_bit_words, bool flip){
+u32 evaluate_clauses_of_variable_satisfied(u32 var, __global u32* restrict variables_to_clauses, __constant u32* restrict clauses, __local u32* bit_values, u32 nr_bit_words, bool flip){
 	u32 index = variables_to_clauses[var]; 			// get index where variable to clauses info is stored
 	u32 nr_clauses = variables_to_clauses[index];	// first field contains number of clauses the variable occurs in
 
 	u32 evaluation = 0;
-    #pragma pipline
 		for (unsigned int i = 0; i < nr_clauses; i++){
 		u32 index_to_clause = variables_to_clauses[index + 1 + i];
 		if (flip)
@@ -131,7 +150,6 @@ u32 evaluate_clauses_of_variable_satisfied(u32 var, __constant u32* restrict var
 }
 
 int find_clause(u32 index_to_clause, __local u32 * restrict unsatisfied_clauses, u32 nr_unsatisfied){
-    #pragma pipline
     for (unsigned int i = 0; i < nr_unsatisfied; i++)
         if (unsatisfied_clauses[i] == index_to_clause)
             return i;
@@ -151,12 +169,11 @@ u32 remove_unsatisfied_clause(u32 index_to_clause, __local u32 * restrict unsati
     return nr_unsatisfied - 1;
 }
 
-u32 evaluate_clauses_of_variable_unsatisfied2(u32 var, __constant u32* restrict variables_to_clauses, __constant u32* restrict clauses, __global u32* restrict bit_values, u32 nr_bit_words, __local u32 * restrict unsatisfied_clauses, u32 nr_unsatisfied){
+u32 evaluate_clauses_of_variable_unsatisfied2(u32 var, __global u32* restrict variables_to_clauses, __constant u32* restrict clauses, __local u32 * restrict bit_values, u32 nr_bit_words, __local u32 * restrict unsatisfied_clauses, u32 nr_unsatisfied){
 	u32 index = variables_to_clauses[var]; 			// get index where variable to clauses info is stored
 	u32 nr_clauses = variables_to_clauses[index];	// first field contains number of clauses the variable occurs in
 
     u32 counter = nr_unsatisfied;
-    #pragma pipline
 	for (unsigned int i = 0; i < nr_clauses; i++){
 		u32 index_to_clause = variables_to_clauses[index + 1 + i];
         bool flipped = evaluate_clause(clauses, index_to_clause, bit_values, nr_bit_words, var);
@@ -167,10 +184,10 @@ u32 evaluate_clauses_of_variable_unsatisfied2(u32 var, __constant u32* restrict 
 		if (flipped && !unflipped){     // this is a new satisfied clause => remove it
             counter = remove_unsatisfied_clause(index_to_clause, unsatisfied_clauses, counter);
 		}
-		if (flipped && unflipped){      // both cases are satisfied => nothing must be added
-		}
-		if (!flipped && !unflipped){    // both cases are unsatisfied, already in list => nothing must be added
-		}
+		// if (flipped && unflipped){      // both cases are satisfied => nothing must be added
+		// }
+		// if (!flipped && !unflipped){    // both cases are unsatisfied, already in list => nothing must be added
+		// }
 	}
 
 	return counter;
@@ -178,7 +195,7 @@ u32 evaluate_clauses_of_variable_unsatisfied2(u32 var, __constant u32* restrict 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-bool evaluate_clause_t(__constant u32* clauses, u32 index_to_clause, __global u32 * restrict bit_values, u32 nr_bit_words, u32 flip_var, u32 t)
+bool evaluate_clause_t(__constant u32* clauses, u32 index_to_clause, __local u32 * restrict bit_values, u32 nr_bit_words, u32 flip_var, u32 t)
 {
     // is equivalent to counting clauses going from unsatisfied to satisfied if t == 1
 
@@ -187,7 +204,6 @@ bool evaluate_clause_t(__constant u32* clauses, u32 index_to_clause, __global u3
 
     bool state = false;
     u32 c = 0;
-    #pragma pipline
         for (int i = 0; i < nr_lits; i++){
                 u32 lit = clauses[index + 1 + i];
 
@@ -206,12 +222,11 @@ bool evaluate_clause_t(__constant u32* clauses, u32 index_to_clause, __global u3
     return c - 1 == t;                          // else flipping would decrease number of satisfied literals
 }
 
-u32 evaluate_clauses_of_variable_make_t(u32 var, __constant u32* restrict variables_to_clauses, __constant u32* restrict clauses, __global u32* restrict bit_values, u32 nr_bit_words, u32 t){
+u32 evaluate_clauses_of_variable_make_t(u32 var, __global u32* restrict variables_to_clauses, __constant u32* restrict clauses, __local u32 * restrict bit_values, u32 nr_bit_words, u32 t){
         u32 index = variables_to_clauses[var];                  // get index where variable to clauses info is stored
         u32 nr_clauses = variables_to_clauses[index];   // first field contains number of clauses the variable occurs in
 
         u32 evaluation = 0;
-        #pragma pipline
         for (unsigned int i = 0; i < nr_clauses; i++){
                 u32 index_to_clause = variables_to_clauses[index + 1 + i];
         evaluation += evaluate_clause_t(clauses, index_to_clause, bit_values, nr_bit_words, var, t);
@@ -220,27 +235,41 @@ u32 evaluate_clauses_of_variable_make_t(u32 var, __constant u32* restrict variab
         return evaluation;
 }
 
+void refill_bit_values( __local u32 * restrict bit_values, __global u32 * restrict bit_values_g)
+{
+    for (unsigned int i = 0; i < 512; i++)
+    {
+        bit_values_g[i] = bit_values[i];
+    }
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-__kernel void search(__global struct thread_state* restrict states,
-	__global u32* restrict  bit_values,
+__kernel void search(__global struct thread_state * restrict states,
+	__global u32* restrict bit_values_g,
 	unsigned int nr_bit_words,
 	__constant u32 * restrict clauses,
 	unsigned int  nr_clauses,
-	__constant u32* restrict variables_to_clauses,
+	__global u32* restrict variables_to_clauses,
 	unsigned int nr_variables,
-	unsigned int n,
-	double p)
+	unsigned int n)
 {
     u32 biggest = 0xFFFFFFFF;
     // biggest = ~biggest;
 
     __local u32 unsatisfied_clauses[512];
+    __local u32 bit_values[512];
+    // __local struct thread_state states[256];
+
+
+    bit_values[get_global_id(0)] = bit_values_g[get_global_id(0)];
+    bit_values[get_global_id(0) + 256] = bit_values_g[get_global_id(0) + 256];
+    // states[get_global_id(0)] = states_g[get_global_id(0)];
+    barrier(CLK_LOCAL_MEM_FENCE);
 
     struct thread_state state = states[get_global_id(0)];
 
     int nr_satisfied = 0;
-    #pragma pipline
     for (unsigned int i = 0; i < nr_clauses; i++)
         if (evaluate_clause(clauses, i, bit_values, nr_bit_words, 0))
             nr_satisfied++;
@@ -252,7 +281,6 @@ __kernel void search(__global struct thread_state* restrict states,
     if (nr_unsatisfied <= 448){
         // fill array with indices of unsatisfied clauses
         int counter = 0;
-        #pragma pipline
         for (unsigned int i = 0; i < nr_clauses; i++){
             if (!evaluate_clause(clauses, i, bit_values, nr_bit_words, 0)){
                 unsatisfied_clauses[counter] = i;
@@ -260,20 +288,21 @@ __kernel void search(__global struct thread_state* restrict states,
             }
         }
     }
-    #pragma pipline
     for (int i = 0; i < n; i++){
         if(nr_unsatisfied > 0){
             // if there are too many unsatisfied clauses
             u32 clause_i;
+            state.rnd = rnd(state.rnd);
             if (nr_unsatisfied > 448){
                 // get random clause
-                state.rnd = rnd(state.rnd);
+                // state.rnd = rnd(state.rnd);
                 // clause_i = state.rnd % nr_clauses;
-                clause_i = state.rnd - (state.rnd / nr_clauses) * nr_clauses;
+                clause_i = mod_alt(state.rnd, nr_clauses);
             } else {
                 // get random clause from list
-                state.rnd = rnd(state.rnd);
-                clause_i = unsatisfied_clauses[state.rnd % nr_unsatisfied];
+                // state.rnd = rnd(state.rnd);
+                clause_i = unsatisfied_clauses[mod_alt(state.rnd, nr_unsatisfied)];
+                // clause_i = unsatisfied_clauses[state.rnd % nr_unsatisfied];
             }
 
             // this should be satisfied, if nr_unsatisfied <= 448
@@ -283,12 +312,15 @@ __kernel void search(__global struct thread_state* restrict states,
 
                 // greedy or random
                 state.rnd = rnd(state.rnd);
-                u32 flip = state.rnd % biggest;
-                if (flip <= p*biggest){
+                // u32 flip = state.rnd % biggest;
+                u32 flip = state.rnd;
+                // u32 flip = mod_alt(state.rnd, biggest);
+                // if (flip <= p*biggest){
+                if(flip <= 620756991){
                     // which bit to randomyl flip
                     state.rnd = rnd(state.rnd);
-                    u32 which_bit = state.rnd % nr_lits;
-
+                    // u32 which_bit = state.rnd % nr_lits;
+                    u32 which_bit = mod_alt(state.rnd, nr_lits);
                     u32 lit = clauses[index_clause + 1 + which_bit];	// get literal
                     bool sign = lit & 1;	// extract sign
                     u32 var = lit >> 1;		// extract variable
@@ -300,7 +332,9 @@ __kernel void search(__global struct thread_state* restrict states,
                     if (nr_unsatisfied <= 448)
                         evaluate_clauses_of_variable_unsatisfied2(var, variables_to_clauses, clauses, bit_values, nr_bit_words, unsatisfied_clauses, nr_unsatisfied);
 
-                    flip_bit(var, bit_values, nr_bit_words);	// flip the corresponding bit
+                    flip_bit(var, bit_values, nr_bit_words);	// flip the corresponding bit 
+                    refill_bit_values(bit_values, bit_values_g);
+                                           
 
                     nr_unsatisfied = nr_unsatisfied - before + after;
                 } else{
@@ -309,7 +343,6 @@ __kernel void search(__global struct thread_state* restrict states,
                     int nr_unsatisfied_after = -1;
                     u32 var_after = 0;
                     int lmk_score = -1;
-                    #pragma pipline
                     for (unsigned int j = 0; j < nr_lits; j++){
                         u32 lit = clauses[index_clause + 1 + j];	// get literal
                         bool sign = lit & 1;	// extract sign
@@ -348,15 +381,17 @@ __kernel void search(__global struct thread_state* restrict states,
                             evaluate_clauses_of_variable_unsatisfied2(var_after, variables_to_clauses, clauses, bit_values, nr_bit_words, unsatisfied_clauses, nr_unsatisfied);
 
                         nr_unsatisfied = nr_unsatisfied - nr_unsatisfied_before + nr_unsatisfied_after;
-                        flip_bit(var_after, bit_values, nr_bit_words);	// flip the corresponding bit
+                        flip_bit(var_after, bit_values, nr_bit_words);	// flip the corresponding bit   
+                        refill_bit_values(bit_values, bit_values_g);
                     }
                 }
             }
 	}
-        if (nr_unsatisfied < nr_unsatisfied_old)
+        if (nr_unsatisfied < nr_unsatisfied_old){      
             break;
+        }
     }
-
     state.nr_satisfied = nr_clauses - nr_unsatisfied;
     states[get_global_id(0)] = state;
+    
 }
